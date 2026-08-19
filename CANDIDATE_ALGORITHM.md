@@ -14,6 +14,10 @@
 4. **Проверка дублей:** Обязательна перед созданием (read-only)
 5. **UUID генерирует клиент** (не `gen_random_uuid()`)
 6. **Владелец кандидата** — обязательный входной параметр
+7. **Собеседование заказчика → инвайт в календарь (обязательно):** при создании
+   взаимодействия «Назначено техническое собеседование заказчика» 3.7 сразу
+   создаётся событие в корпоративном Яндекс.Календаре («Hunttech у заказчика»),
+   кандидат добавляется участником (ATTENDEE + iTIP через schedule-outbox)
 
 ---
 
@@ -40,10 +44,10 @@
 | **Формат Hunttech** | Резюме в стандарте hh/HuntTech (.doc/.docx) | `file_cv_id` → `sys_file` |
 
 ### Метаданные
-| Параметр | Значение |
-|----------|----------|
-| `owner_id` | UUID рекрутера-владельца (`sec_user.id`) |
-| `owner_name` | Имя рекрутера (`sec_user.user_name`) |
+|| Параметр | Значение ||
+||----------|----------|
+|| `owner_id` | UUID рекрутера-владельца (`sec_user.id`) ||
+|| `owner_name` | Имя рекрутера (`sec_user.name`) ||
 | `operator_login` | Логин оператора (`hermes` или `yakov`) |
 | `vacancy_id` | Default: `4fc9fb45-5f78-2494-47aa-5a5fa2c97660` |
 
@@ -299,6 +303,50 @@ WHERE sf.id IN (:original_file_id, :format_file_id);
 
 ---
 
+## 🤝 Шаг 5: Взаимодействие «Назначено техническое собеседование заказчика» (3.7)
+
+Тип в справочнике `hunttech_iteraction`: **«Назначено техническое собеседование
+заказчика» 3.7 = `f3df6330-b0b0-e2bf-59eb-6f19c0026dbf`** (add_field='addDate').
+
+INSERT в `hunttech_iteraction_list`:
+- `iteraction_type_id` = f3df6330-b0b0-e2bf-59eb-6f19c0026dbf
+- `candidate_id`, `vacancy_id` (Default 4fc9fb45 или конкретная вакансия)
+- `recrutier_id` / `recrutier_name` = кто вёл (обычно владелец)
+- `add_date` = дата и время собеседования (timestamp МСК, напр. `2026-08-20 14:00:00`)
+- `comment_` = «Назначено техническое собеседование заказчика: dd.MM.yyyy HH:mm» +
+  ссылка на собеседование (дублируется в `communication_method`)
+- `communication_method` = полная ссылка на созвон (ktalk/telemost)
+- `number_iteraction` = max+1, `date_iteraction` = now(), `rating` = 3..4,
+  `current_priority` / `current_open_close` — копия с вакансии
+- version=1, created_by/updated_by = оператор
+
+### 🗓️ Шаг 5.1: Инвайт в корпоративный Яндекс.Календарь (ОБЯЗАТЕЛЬНО)
+
+При создании взаимодействия 3.7 **сразу же** создаётся событие-инвайт в
+корпоративном календаре Ханттек **«Hunttech у заказчика»** (CalDAV,
+`events-34179601`), и **два участника** — кандидат и рекрутер — на их email
+уходит приглашение с кнопками Принять/Отклонить.
+
+1. **Событие** (PUT .ics, паттерн Яндекса):
+   - SUMMARY: `<время> мск <дд.мм> <клиент> interview <ФИО>, (<компания/вакансия>)`
+     (напр. `14 мск 20.08 Тбанк interview Арефьев Даниил, (65apps Middle Data Analyst)`)
+   - DTSTART/DTEND: **TZID=Europe/Saratov = UTC+4** (14:00 МСК = 15:00 Saratov)
+   - DESCRIPTION: дата/время МСК + ссылка на собеседование + полный текст приглашения
+   - ORGANIZER;CN=Алексей Ананьев:mailto:alan@hunttech.ru, CATEGORIES, CLASS:PRIVATE
+2. **Участники (ДВА, строки сразу ПОСЛЕ ORGANIZER, БЕЗ RSVP=TRUE):**
+   - кандидат: `ATTENDEE;PARTSTAT=NEEDS-ACTION;CN="<ФИО>";ROLE=REQ-PARTICIPANT:mailto:<email кандидата>`
+   - рекрутер (кто вёл/назначил собеседование, `sec_user.email`; напр. Анастасия
+     Худеева akhudeeva = khudeeva01@inbox.ru): `ATTENDEE;PARTSTAT=NEEDS-ACTION;CN="<ФИО рекрутера>";ROLE=REQ-PARTICIPANT:mailto:<email>`
+3. **Отправка инвайта**: PUT .ics + iTIP `METHOD:REQUEST` через schedule-outbox
+   (`POST https://caldav.yandex.ru/calendars/alan%40hunttech.ru/outbox/`).
+   Одного PUT недостаточно — иначе email участникам не уйдёт.
+   Успех: `<C:request-status>2.0;Success</C:request-status>` для каждого участника.
+
+Полный процесс (OAuth-токен, эндпоинты, паттерн .ics, read-back) — в навыке
+`yandex-calendar-hunttech`; токен: `~/.hermes/profiles/hrm-operator/workspace/yandex_calendar.json`.
+
+---
+
 ## 📋 Итоговый чек-лист (Definition of Done)
 
 | Проверка | Критерий |
@@ -308,6 +356,8 @@ WHERE sf.id IN (:original_file_id, :format_file_id);
 | ✅ Файлы | `file_size` в БД == `stat` физического файла для обоих |
 | ✅ some_files | 2 записи: `dtype='hunttech_SomeFilesCandidateCV'`, `file_type_id=RESUME_FILE_TYPE_ID` |
 | ✅ Взаимодействие | `iteraction_type_id=NEW_CONTACT_TYPE_ID`, `rating=4`, comment с датой, `vacancy_id=DEFAULT` |
+| ✅ Взаимодействие 3.7 (если назначали) | `iteraction_type_id=3.7`, `add_date` = дата/время МСК, ссылка в `communication_method` и comment_ |
+| ✅ Инвайт в календарь (при 3.7) | Событие в «Hunttech у заказчика» + ATTENDEE: кандидат И рекрутер + iTIP METHOD:REQUEST (2.0;Success обоим) |
 | ✅ Контакты | `contact_info_checked=TRUE` в CV после сверки |
 
 ---
@@ -381,4 +431,5 @@ def create_candidate_hrm(resume_data, owner_id, owner_name,
 - `DEVELOPER_GUIDE.md` — документация разработчика бота
 - `README.md` — пользовательская документация бота
 - Навык `hrm-candidate-creation` — источник правил
+- Навык `yandex-calendar-hunttech` — инвайты в корпоративный календарь (3.7)
 - Навык `hunttech-bot-common` — библиотека ботов

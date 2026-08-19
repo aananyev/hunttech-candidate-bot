@@ -40,3 +40,9 @@ async def cmd_usage(message: Message, command: CommandObject = None):
     except Exception as e:
         logger.exception("Usage report failed: %s", e)
         await message.answer(f"❌ *Ошибка при формировании отчёта:*\n`{e}`")
+
+
+async def cmd_usage_from_button(message: Message):
+    """Хендлер кнопки '📊 Статистика (/usage)' из нижнего меню."""
+    command = CommandObject(command="usage", args=None)
+    await cmd_usage(message, command)

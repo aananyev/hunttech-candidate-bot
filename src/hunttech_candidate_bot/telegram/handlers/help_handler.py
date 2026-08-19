@@ -53,3 +53,9 @@ async def cmd_help(message: Message, command: CommandObject = None):
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=_main_reply_keyboard()
     )
+
+
+async def cmd_help_from_button(message: Message):
+    """Хендлер кнопки '❓ Справка' из нижнего меню."""
+    command = CommandObject(command="help", args=None)
+    await cmd_help(message, command)

@@ -52,46 +52,165 @@ async def cmd_candidate(message: Message, command: CommandObject = None, state: 
 
 # ===== СОЗДАНИЕ КАНДИДАТА =====
 
-async def _start_candidate_create(message: Message, state: FSMContext):
-    """Шаг 1: выбор владельца-рекрутера."""
-    app = get_app()
-    if not app or not app.db:
-        await message.answer("❌ База данных не подключена. Настройте через `/setup db`.")
-        return
 
-    # Получаем список рекрутеров из sec_user
-    recruiters = await _get_recruiters(app.db)
-    if not recruiters:
-        await message.answer("❌ В системе не найдено активных рекрутеров (sec_user).")
-        return
+async def _build_step1_view(tg_user, recruiters: list[dict]) -> tuple[list[list[InlineKeyboardButton]], str]:
+    """Общая логика: поиск рекрутера + построение клавиатуры и текста для Шага 1.
+    Возвращает (kb_buttons, info_text)."""
+    matched_recruiter = None
 
-    # Inline клавиатура с рекрутерами
-    kb_buttons = []
-    for r in recruiters:
-        kb_buttons.append([
-            InlineKeyboardButton(
-                text=f"👤 {r['user_name']} (@{r['user_login']})",
-                callback_data=f"candidate_owner:{r['id']}",
-            )
-        ])
-    kb_buttons.append([
-        InlineKeyboardButton(text="✏️ Другой... (ввести ID вручную)", callback_data="candidate_owner:manual")
-    ])
+    # Сначала ищем по username (без @)
+    if tg_user.username:
+        for r in recruiters:
+            if r.get('login') and r['login'].lower() == tg_user.username.lower():
+                matched_recruiter = r
+                break
 
+    # Если не нашли по username, пробуем найти по имени (first_name + last_name)
+    if not matched_recruiter and tg_user.first_name:
+        tg_full_name = f"{tg_user.first_name} {tg_user.last_name or ''}".strip()
+        for r in recruiters:
+            if r.get('name') and r['name'].lower() == tg_full_name.lower():
+                matched_recruiter = r
+                break
+
+    # Формируем клавиатуру
+    if matched_recruiter:
+        # Пользователь найден в HRM — показываем 2 кнопки
+        # Защита от NULL в name/login
+        display_name = matched_recruiter.get('name') or matched_recruiter.get('login') or 'Без имени'
+        display_login = matched_recruiter.get('login') or ''
+        login_suffix = f" (@{display_login})" if display_login else ""
+        kb_buttons = [
+            [InlineKeyboardButton(
+                text=f"✅ {display_name}{login_suffix} — это я",
+                callback_data=f"candidate_owner:{matched_recruiter['id']}"
+            )],
+            [InlineKeyboardButton(text="🔄 Изменить", callback_data="candidate_owner:change")]
+        ]
+        info_text = f"👤 *Шаг 1/5: Владелец кандидата*\n\nАвтоматически определен: *{display_name}{login_suffix}*\n\nНажмите \"Это я\" для подтверждения или \"Изменить\" для выбора другого рекрутера."
+    else:
+        # Пользователь не найден в HRM — показываем кнопку "Изменить" и подсказку
+        kb_buttons = [
+            [InlineKeyboardButton(
+                text=f"👤 {tg_user.first_name or 'Пользователь'} (@{tg_user.username or 'без username'}) — не в HRM",
+                callback_data="candidate_owner:manual"
+            )],
+            [InlineKeyboardButton(text="🔄 Выбрать рекрутера из списка", callback_data="candidate_owner:change")]
+        ]
+        info_text = f"👤 *Шаг 1/5: Выберите владельца кандидата (рекрутера)*\n\nВаш аккаунт ({tg_user.first_name or 'Пользователь'} @{tg_user.username or 'без username'}) не найден в HRM.\n\nНажмите \"Выбрать рекрутера из списка\"."
+
+    return kb_buttons, info_text
+
+
+async def _send_step1(message: Message, state: FSMContext, kb_buttons: list, info_text: str):
+    """Отправляет Шаг 1 как новое сообщение (для /candidate create)."""
     await state.set_state(CandidateCreateState.owner)
     await message.answer(
-        "👤 *Шаг 1/5: Выберите владельца кандидата (рекрутера)*\n\n"
-        "Кандидат будет заведён на этого рекрутера. "
-        "После создания будет автоматически создано взаимодействие «Новый контакт» на него.",
+        info_text,
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_buttons),
     )
 
 
+async def _edit_step1(callback: CallbackQuery, state: FSMContext, kb_buttons: list, info_text: str):
+    """Редактирует текущее сообщение на Шаг 1 (для кнопки Назад)."""
+    await state.set_state(CandidateCreateState.owner)
+    await callback.message.edit_text(
+        info_text,
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_buttons),
+    )
+
+
+async def _start_candidate_create_with_user(message: Message, state: FSMContext, tg_user):
+    """Шаг 1: выбор владельца-рекрутера (с автоопределением по переданному пользователю)."""
+    app = get_app()
+    if not app or not app.db:
+        await message.answer("❌ База данных не подключена. Настройте через `/setup db`.")
+        return
+
+    recruiters = await _get_recruiters(app.db)
+    if not recruiters:
+        await message.answer("❌ В системе не найдено активных рекрутеров (sec_user).")
+        return
+
+    kb_buttons, info_text = await _build_step1_view(tg_user, recruiters)
+    await _send_step1(message, state, kb_buttons, info_text)
+
+
+async def _start_candidate_create_with_user_edit(callback: CallbackQuery, state: FSMContext, tg_user):
+    """Шаг 1: выбор владельца-рекрутера (с автоопределением по переданному пользователю) — редактирует сообщение."""
+    app = get_app()
+    if not app or not app.db:
+        await callback.message.edit_text("❌ База данных не подключена. Настройте через `/setup db`.")
+        return
+
+    recruiters = await _get_recruiters(app.db)
+    if not recruiters:
+        await callback.message.edit_text("❌ В системе не найдено активных рекрутеров (sec_user).")
+        return
+
+    kb_buttons, info_text = await _build_step1_view(tg_user, recruiters)
+    await _edit_step1(callback, state, kb_buttons, info_text)
+
+
+async def _start_candidate_create(message: Message, state: FSMContext):
+    """Шаг 1: выбор владельца-рекрутера (с автоопределением текущего пользователя)."""
+    await _start_candidate_create_with_user(message, state, message.from_user)
+
+
 async def candidate_owner_callback(callback: CallbackQuery, state: FSMContext):
     """Обработчик выбора владельца."""
+    logger.info("candidate_owner_callback CALLED: data=%s, user=%s, state=%s", callback.data, callback.from_user.id, await state.get_state())
     data = callback.data.split(":")[1]
     await callback.answer()
+
+    if data == "change":
+        # Показываем полный список рекрутеров
+        logger.info("candidate_owner_callback: CHANGE branch triggered")
+        app = get_app()
+        if not app or not app.db:
+            await callback.message.edit_text("❌ База данных не подключена.")
+            return
+        
+        recruiters = await _get_recruiters(app.db)
+        if not recruiters:
+            await callback.message.edit_text("❌ В системе не найдено активных рекрутеров (sec_user).")
+            return
+        
+        logger.info("candidate_owner_callback: Found %d recruiters", len(recruiters))
+
+        kb_buttons = []
+        for r in recruiters:
+            display_name = r.get('name') or r.get('login') or 'Без имени'
+            display_login = r.get('login') or ''
+            login_suffix = f" (@{display_login})" if display_login else ""
+            kb_buttons.append([
+                InlineKeyboardButton(
+                    text=f"👤 {display_name}{login_suffix}",
+                    callback_data=f"candidate_owner:{r['id']}",
+                )
+            ])
+        kb_buttons.append([
+            InlineKeyboardButton(text="✏️ Другой... (ввести ID вручную)", callback_data="candidate_owner:manual")
+        ])
+        kb_buttons.append([
+            InlineKeyboardButton(text="⬅️ Назад", callback_data="candidate_owner:back")
+        ])
+
+        await callback.message.edit_text(
+            "👤 *Шаг 1/5: Выберите владельца кандидата (рекрутера)*\n\n"
+            "Кандидат будет заведён на этого рекрутера. "
+            "После создания будет автоматически создано взаимодействие \"Новый контакт\" на него.",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_buttons),
+        )
+        return
+
+    if data == "back":
+        # Возвращаемся к начальному экрану с автоопределением (используем пользователя callback) — редактируем сообщение
+        await _start_candidate_create_with_user_edit(callback, state, callback.from_user)
+        return
 
     if data == "manual":
         await state.set_state(CandidateCreateState.owner)
@@ -101,9 +220,8 @@ async def candidate_owner_callback(callback: CallbackQuery, state: FSMContext):
         )
         return
 
-    # Сохраняем владельца
+    # Сохраняем владельца (выбран из списка)
     owner_id = data
-    # Получаем имя рекрутера
     app = get_app()
     recruiter_name = await _get_recruiter_name(app.db, owner_id) if app and app.db else owner_id
     await state.update_data(owner_id=owner_id, owner_name=recruiter_name)
@@ -122,6 +240,7 @@ async def candidate_owner_callback(callback: CallbackQuery, state: FSMContext):
 
 async def candidate_resume_file_handler(message: Message, state: FSMContext):
     """Обработчик загрузки файла резюме."""
+    logger.info("candidate_resume_file_handler called: user=%s, state=%s", message.from_user.id, await state.get_state())
     if not message.document:
         await message.answer("❌ Пришлите файл резюме (документ).")
         return
@@ -165,7 +284,7 @@ async def candidate_resume_file_handler(message: Message, state: FSMContext):
         "📎 *Шаг 3/5: Файл в формате Hunttech (опционально)*\n\n"
         "Есть ли у вас резюме кандидата в стандарте hh/HuntTech "
         "(файл для поля fileCV в CandidateCVEdit)?\n\n"
-        "Если да — загрузите его. Если нет — нажмите «Пропустить».",
+        "Если да — загрузите его. Если нет — нажмите \"Пропустить\".",
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=kb,
     )
@@ -173,6 +292,7 @@ async def candidate_resume_file_handler(message: Message, state: FSMContext):
 
 async def candidate_format_callback(callback: CallbackQuery, state: FSMContext):
     """Обработчик выбора про файл в формате Hunttech."""
+    logger.debug("candidate_format_callback called: data=%s, user=%s, state=%s", callback.data, callback.from_user.id, await state.get_state())
     action = callback.data.split(":")[1]
     await callback.answer()
 
@@ -380,7 +500,7 @@ async def _create_candidate_final(message: Message, state: FSMContext):
             f"📄 CV ID: `{result.cv_id}`\n"
             f"📎 Оригинал: {'✅' if result.original_file_id else '—'}\n"
             f"📎 Формат Hunttech: {'✅' if result.format_file_id else '—'}\n"
-            f"🤝 Взаимодействие: «Новый контакт» (ID: `{result.iteraction_id}`)\n\n"
+            f"🤝 Взаимодействие: \"Новый контакт\" (ID: `{result.iteraction_id}`)\n\n"
             f"ℹ️ Автовзаимодействие создано с рейтингом 4 (максимум).",
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=_main_reply_keyboard()
@@ -552,10 +672,10 @@ async def _get_recruiters(db_pool) -> list[dict]:
     try:
         async with db_pool.acquire() as conn:
             rows = await conn.fetch("""
-                SELECT id, user_login, user_name
+                SELECT id, login, name
                 FROM sec_user
                 WHERE delete_ts IS NULL AND active = true
-                ORDER BY user_name
+                ORDER BY name
             """)
             return [dict(r) for r in rows]
     except Exception as e:
@@ -568,9 +688,9 @@ async def _get_recruiter_name(db_pool, user_id: str) -> str:
     try:
         async with db_pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT user_name FROM sec_user WHERE id = $1", user_id
+                "SELECT name FROM sec_user WHERE id = $1", user_id
             )
-            return row["user_name"] if row else user_id
+            return row["name"] if row else user_id
     except Exception:
         return user_id
 
@@ -586,3 +706,20 @@ def _cleanup_temp_files(data: dict):
                     path.unlink()
                 except Exception:
                     pass
+
+
+# ===== ХЕНДЛЕРЫ ДЛЯ КНОПОК НИЖНЕГО МЕНЮ (ReplyKeyboard) =====
+
+async def cmd_candidate_create_from_button(message: Message, state: FSMContext):
+    """Хендлер кнопки '👤 Создать кандидата' из нижнего меню."""
+    await _start_candidate_create(message, state)
+
+
+async def cmd_candidate_check_from_button(message: Message, state: FSMContext):
+    """Хендлер кнопки '🔍 Проверить дубли' из нижнего меню."""
+    await _start_candidate_check(message, state)
+
+
+async def cmd_candidate_list_from_button(message: Message):
+    """Хендлер кнопки '📋 Мои кандидаты' из нижнего меню."""
+    await _show_candidate_list(message)

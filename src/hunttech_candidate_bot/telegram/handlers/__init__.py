@@ -32,6 +32,15 @@ def register_all_handlers(dp: Dispatcher):
     dp.message.register(usage_handler.cmd_usage, Command("usage"))
     dp.message.register(candidate_handler.cmd_candidate, Command("candidate"))
 
+    # ── Reply Keyboard buttons (текстовые сообщения от кнопок меню) ──
+    dp.message.register(candidate_handler.cmd_candidate_create_from_button, F.text == "👤 Создать кандидата")
+    dp.message.register(candidate_handler.cmd_candidate_check_from_button, F.text == "🔍 Проверить дубли")
+    dp.message.register(candidate_handler.cmd_candidate_list_from_button, F.text == "📋 Мои кандидаты")
+    dp.message.register(help_handler.cmd_help_from_button, F.text == "❓ Справка")
+    # Админские кнопки
+    dp.message.register(setup_handler.cmd_setup_from_button, F.text == "⚙️ Настройки (/setup)")
+    dp.message.register(usage_handler.cmd_usage_from_button, F.text == "📊 Статистика (/usage)")
+
     # ── Callbacks ──
     # user: userlist callbacks
     dp.callback_query.register(user_handler.userlist_callback, F.data.startswith("userlist:"))
@@ -40,7 +49,7 @@ def register_all_handlers(dp: Dispatcher):
     dp.callback_query.register(setup_handler.ai_provider_callback, F.data.startswith("ai_provider:"), F.state == AiSetupState.provider)
 
     # candidate: FSM callbacks
-    dp.callback_query.register(candidate_handler.candidate_owner_callback, F.data.startswith("candidate_owner:"), F.state == CandidateCreateState.owner)
+    dp.callback_query.register(candidate_handler.candidate_owner_callback, F.data.startswith("candidate_owner:"))
     dp.callback_query.register(candidate_handler.candidate_format_callback, F.data.startswith("candidate_format:"), F.state == CandidateCreateState.resume_format_file)
     dp.callback_query.register(candidate_handler.candidate_confirm_callback, F.data.startswith("candidate_confirm:"), F.state == CandidateCreateState.confirm)
     dp.callback_query.register(candidate_handler.candidate_dup_callback, F.data.startswith("candidate_dup:"), F.state == CandidateCreateState.confirm)

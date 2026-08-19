@@ -132,6 +132,15 @@ async def cmd_setup(message: Message, state: FSMContext, command: CommandObject 
     )
 
 
+# ── Хендлер для кнопки меню ────────────────────────────────────────────────
+
+async def cmd_setup_from_button(message: Message, state: FSMContext):
+    """Хендлер кнопки '⚙️ Настройки (/setup)' из нижнего меню."""
+    # Создаем фейковый CommandObject с args=None
+    command = CommandObject(command="setup", args=None)
+    await cmd_setup(message, state, command)
+
+
 # ── /setup user: доступ рекрутеров ────────────────────────────────────────
 
 async def _cmd_setup_user(message: Message, args: str | None = None):
@@ -176,13 +185,13 @@ async def _cmd_setup_user(message: Message, args: str | None = None):
         "• `/setup user delete @username` — отозвать доступ\n"
         "• `/setup user list` — список пользователей\n\n"
         "Рекрутер с доступом может самостоятельно создавать кандидатов "
-        "(`/candidate create`), проверять дубли (`/candidate check`).\n"
+        "(/candidate create), проверять дубли (/candidate check).\n"
         "Получить Telegram ID можно через `/user list` или попросив "
         "пользователя написать боту `/start`."
     )
 
 
-# ── /setup ai: FSM-мастер ─────────────────────────────────────────────────
+# ── /setup ai: FSM-мастер ────────────────────────────────────────────────
 
 async def _start_ai_setup(message: Message, state: FSMContext):
     """Шаг 1: выбор провайдера."""

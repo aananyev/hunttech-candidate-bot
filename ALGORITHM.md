@@ -66,7 +66,7 @@ class CandidateCreateState(StatesGroup):
 
 #### 1. Выбор владельца (owner)
 - Показываем inline-клавиатуру с рекрутерами из `sec_user` (ExtUser)
-- Данные берутся из БД: `SELECT id, user_login, user_name FROM sec_user WHERE delete_ts IS NULL AND active = true`
+- Данные берутся из БД: `SELECT id, login, name FROM sec_user WHERE delete_ts IS NULL AND active = true`
 - Кнопка "Другой..." — ручной ввод ID/username
 - Обязательный шаг — без владельца не идём дальше (по требованию навыка)
 
