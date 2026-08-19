@@ -14,9 +14,17 @@ logger = logging.getLogger(__name__)
 
 
 def thinking_disabled_extra(client: AIClient) -> dict:
-    """Disable thinking for DeepSeek models."""
+    """Disable thinking for DeepSeek models.
+
+    api.deepseek.com (deepseek-v4-flash и reasoning-модели) понимает
+    ТОЛЬКО ``{"thinking": {"type": "disabled"}}``. Параметр
+    ``chat_template_kwargs.enable_thinking`` здесь ИГНОРИРУЕТСЯ: модель
+    продолжает «думать», съедает весь лимит max_tokens на reasoning
+    (reasoning_tokens ~ 3900-4000) и возвращает обрезанный JSON
+    («Unterminated string» / пустой content). Проверено 2026-08-19.
+    """
     if "deepseek" in client.model.lower():
-        return {"chat_template_kwargs": {"enable_thinking": False}}
+        return {"thinking": {"type": "disabled"}}
     return {}
 
 
@@ -125,9 +133,14 @@ class AIService:
         self.client.ai_source = "user" if username else "admin (.env)"
 
         prompt = RESUME_PARSE_PROMPT.format(resume_text=resume_text[:8000])  # обрезаем если длинное
+        logger.info(
+            "parse_resume: user=%s resume_text_len=%d prompt_len=%d model=%s max_tokens=%d",
+            user_id, len(resume_text), len(prompt), self.model, 4000,
+        )
 
+        response: AIResponse | None = None
         try:
-            response: AIResponse = await self.client.complete(
+            response = await self.client.complete(
                 system_prompt="Ты — HR-система HuntTech. Извлекаешь структурированные данные из резюме. Отвечаешь ТОЛЬКО валидным JSON.",
                 user_prompt=prompt,
                 temperature=0.1,
@@ -135,10 +148,29 @@ class AIService:
                 task="parse_resume",
                 extra_body=thinking_disabled_extra(self.client),
             )
+            if response is None:
+                raise ValueError("AI вернул пустой ответ")
 
             # Парсим JSON ответ
             content = response.content.strip()
-            logger.info("AI parse_resume raw response (len=%d): %s", len(content), content)
+            usage = response.usage or {}
+            completion_tokens = int(usage.get("completion_tokens") or 0)
+            reasoning_tokens = int((usage.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0)
+            logger.info(
+                "parse_resume: AI response len=%d duration_ms=%.0f "
+                "prompt_tokens=%d completion_tokens=%d reasoning_tokens=%d total_tokens=%d",
+                len(content), response.duration_ms,
+                int(usage.get("prompt_tokens") or 0), completion_tokens,
+                reasoning_tokens, int(usage.get("total_tokens") or 0),
+            )
+            # Признак обрыва: исчерпан лимит токенов → JSON будет невалидным
+            if completion_tokens >= 4000:
+                logger.warning(
+                    "parse_resume: response likely TRUNCATED (completion_tokens=%d >= max_tokens=4000, "
+                    "reasoning_tokens=%d) — модель не закончила ответ", completion_tokens, reasoning_tokens,
+                )
+            logger.debug("parse_resume: raw content=%s", content)
+
             # Убираем возможные markdown-блоки
             if content.startswith("```"):
                 content = content.split("```")[1]
@@ -147,14 +179,22 @@ class AIService:
                 content = content.strip()
 
             if not content:
-                logger.error("AI response content is empty!")
+                logger.error("AI response content is empty! usage=%s", usage)
                 raise ValueError("AI вернул пустой ответ")
 
             data = json.loads(content)
             return ParsedResume(**data)
 
         except json.JSONDecodeError as e:
-            logger.error("Failed to parse AI response as JSON: %s, content: %s", e, response.content)
+            content = response.content.strip()
+            pos = e.pos
+            logger.error(
+                "Failed to parse AI response as JSON: %s | usage=%s | "
+                "content_len=%d truncated=%s | context: ...%r... | tail: %r",
+                e, getattr(response, "usage", {}), len(content),
+                bool(getattr(response, "usage", {}).get("completion_tokens", 0) >= 4000),
+                content[max(0, pos - 80):pos + 80], content[-150:],
+            )
             raise ValueError(f"AI вернул невалидный JSON: {e}")
         except Exception as e:
             logger.error("AI parse_resume failed: %s", e)
