@@ -1,0 +1,59 @@
+# HuntTech Candidate Bot — .gitignore
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Build
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data (local runtime)
+data/access_hunttech_candidate.json
+data/db_config.json
+data/startup_state.json
+data/temp_cv/
+
+# Logs
+*.log
+logs/
+
+# Test
+.coverage
+.pytest_cache/
+htmlcov/
+
+# Type checking
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Distribution
+*.tar.gz
+*.whl
