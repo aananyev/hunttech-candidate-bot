@@ -57,3 +57,5 @@ dmypy.json
 # Distribution
 *.tar.gz
 *.whl
+# Data (temp files)
+data/

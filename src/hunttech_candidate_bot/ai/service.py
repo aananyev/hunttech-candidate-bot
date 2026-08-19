@@ -131,18 +131,24 @@ class AIService:
                 system_prompt="Ты — HR-система HuntTech. Извлекаешь структурированные данные из резюме. Отвечаешь ТОЛЬКО валидным JSON.",
                 user_prompt=prompt,
                 temperature=0.1,
-                max_tokens=2000,
+                max_tokens=4000,
                 task="parse_resume",
+                extra_body=thinking_disabled_extra(self.client),
             )
 
             # Парсим JSON ответ
             content = response.content.strip()
+            logger.info("AI parse_resume raw response (len=%d): %s", len(content), content)
             # Убираем возможные markdown-блоки
             if content.startswith("```"):
                 content = content.split("```")[1]
                 if content.startswith("json"):
                     content = content[4:]
                 content = content.strip()
+
+            if not content:
+                logger.error("AI response content is empty!")
+                raise ValueError("AI вернул пустой ответ")
 
             data = json.loads(content)
             return ParsedResume(**data)

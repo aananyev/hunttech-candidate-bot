@@ -50,20 +50,16 @@ def register_all_handlers(dp: Dispatcher):
 
     # candidate: FSM callbacks
     dp.callback_query.register(candidate_handler.candidate_owner_callback, F.data.startswith("candidate_owner:"))
-    dp.callback_query.register(candidate_handler.candidate_format_callback, F.data.startswith("candidate_format:"), F.state == CandidateCreateState.resume_format_file)
-    dp.callback_query.register(candidate_handler.candidate_confirm_callback, F.data.startswith("candidate_confirm:"), F.state == CandidateCreateState.confirm)
-    dp.callback_query.register(candidate_handler.candidate_dup_callback, F.data.startswith("candidate_dup:"), F.state == CandidateCreateState.confirm)
+    dp.callback_query.register(candidate_handler.candidate_format_callback, F.data.startswith("candidate_format:"))
+    dp.callback_query.register(candidate_handler.candidate_confirm_callback, F.data.startswith("candidate_confirm:"))
+    dp.callback_query.register(candidate_handler.candidate_dup_callback, F.data.startswith("candidate_dup:"))
 
     # ── FSM message handlers ──
     # setup AI FSM
     dp.message.register(setup_handler.ai_api_key_handler, F.state == AiSetupState.api_key)
     dp.message.register(setup_handler.ai_model_handler, F.state == AiSetupState.model)
 
-    # candidate create FSM
-    dp.message.register(candidate_handler.candidate_resume_file_handler, F.document, F.state == CandidateCreateState.resume_file)
-    dp.message.register(candidate_handler.candidate_format_file_handler, F.document, F.state == CandidateCreateState.resume_format_file)
-
-    # candidate check FSM
-    dp.message.register(candidate_handler.candidate_check_file_handler, F.document, F.state == CandidateCheckState.resume_file)
+    # candidate create FSM — документы маршрутизирует единый диспетчер (state filter ломает перехват)
+    dp.message.register(candidate_handler.candidate_document_dispatcher, F.document)
 
     logger.info("All handlers registered")

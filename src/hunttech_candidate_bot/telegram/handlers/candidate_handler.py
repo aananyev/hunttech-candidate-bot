@@ -238,6 +238,25 @@ async def candidate_owner_callback(callback: CallbackQuery, state: FSMContext):
     )
 
 
+async def candidate_document_dispatcher(message: Message, state: FSMContext):
+    """Общий диспетчер документов: маршрутизация по состоянию FSM (работает в любом состоянии)."""
+    current = await state.get_state()
+    file_name = message.document.file_name if message.document else None
+    logger.info("document_dispatcher: user=%s, state=%s, file=%s", message.from_user.id, current, file_name)
+
+    if current == CandidateCreateState.resume_file.state:
+        await candidate_resume_file_handler(message, state)
+    elif current == CandidateCreateState.resume_format_file.state:
+        await candidate_format_file_handler(message, state)
+    elif current == CandidateCheckState.resume_file.state:
+        await candidate_check_file_handler(message, state)
+    else:
+        await message.answer(
+            "📎 Документ получен, но нет активной операции.\n"
+            "Нажмите «👤 Создать кандидата» или `/cancel` для отмены."
+        )
+
+
 async def candidate_resume_file_handler(message: Message, state: FSMContext):
     """Обработчик загрузки файла резюме."""
     logger.info("candidate_resume_file_handler called: user=%s, state=%s", message.from_user.id, await state.get_state())
@@ -513,6 +532,20 @@ async def _create_candidate_final(message: Message, state: FSMContext):
 
     except Exception as e:
         logger.exception("Candidate creation failed: %s", e)
+        # Усиленный лог: тип ошибки + стадия (репетиция/commit/verify)
+        error_type = type(e).__name__
+        stage_hint = ""
+        msg = str(e)
+        if "person_position" in msg:
+            stage_hint = " (обращение к hunttech_person_position)"
+        elif "REHEARSAL" in msg:
+            stage_hint = " (репетиция)"
+        elif "Commit" in msg or "commit" in msg:
+            stage_hint = " (COMMIT)"
+        elif "not found after commit" in msg:
+            stage_hint = " (верификация: запись не найдена)"
+        logger.error("Candidate creation error details: type=%s stage=%s message=%s",
+                     error_type, stage_hint.strip(" ()") or "unknown", msg)
         await message.edit_text(
             f"❌ *Ошибка при создании кандидата:*\n`{e}`\n\n"
             f"Проверьте логи и попробуйте ещё раз."
